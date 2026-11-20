@@ -51,7 +51,7 @@ const Config = struct {
     server_port: u16 = 443,
     sni: []const u8 = "",
     password: []const u8 = "",
-    insecure: bool = true,
+    insecure: bool = false,
 };
 
 const SocksTarget = struct {
@@ -115,6 +115,7 @@ const TlsConn = struct {
         self.stream_writer = self.stream.writer(tls_write_buffer);
 
         if (!insecure) {
+            if (tls_host.len == 0) return error.MissingTlsVerificationHost;
             self.ca_bundle = .{};
             try self.ca_bundle.?.rescan(allocator);
         }
@@ -128,7 +129,6 @@ const TlsConn = struct {
                 .ca = if (insecure) .no_verification else .{ .bundle = self.ca_bundle.? },
                 .read_buffer = tls_read_buffer,
                 .write_buffer = socket_write_buffer,
-                .allow_truncation_attacks = true,
             },
         );
         return self;
@@ -291,6 +291,8 @@ fn readTextFileTrimmed(allocator: Allocator, path: []const u8) ![]const u8 {
 
 fn parseArgs(allocator: Allocator) !Config {
     var cfg = Config{};
+    var explicit_verify = false;
+    var explicit_insecure = false;
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
     _ = args.next();
@@ -311,8 +313,10 @@ fn parseArgs(allocator: Allocator) !Config {
         } else if (std.mem.eql(u8, arg, "-sni") or std.mem.eql(u8, arg, "--sni")) {
             cfg.sni = try allocator.dupe(u8, args.next() orelse dieUsage());
         } else if (std.mem.eql(u8, arg, "--insecure")) {
+            explicit_insecure = true;
             cfg.insecure = true;
         } else if (std.mem.eql(u8, arg, "--verify")) {
+            explicit_verify = true;
             cfg.insecure = false;
         } else if (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "version") or std.mem.eql(u8, arg, "-V")) {
             try std.fs.File.stdout().writeAll(version ++ "\n");
@@ -324,6 +328,10 @@ fn parseArgs(allocator: Allocator) !Config {
             dieUsage();
         }
     }
+
+    if (explicit_verify and explicit_insecure) dieUsage();
+    if (explicit_verify) cfg.insecure = false;
+    if (explicit_insecure) cfg.insecure = true;
 
     if (cfg.server_host.len == 0 or cfg.password.len == 0) dieUsage();
     return cfg;
